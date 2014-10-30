@@ -2416,7 +2416,7 @@ void cdcacm_uninitialize(FAR void *handle)
        * free the memory resources.
        */
 
-      kmm_free(priv);
+      kfree(priv);
       return;
     }
 #endif
@@ -2446,7 +2446,7 @@ void cdcacm_uninitialize(FAR void *handle)
 
   /* And free the driver structure */
 
-  kmm_free(priv);
+  kfree(priv);
 
 #else
   /* For the case of the composite driver, there is a two pass
