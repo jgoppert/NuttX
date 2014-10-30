@@ -105,7 +105,7 @@ struct cdcacm_dev_s
   FAR struct usbdev_ep_s  *epintin;    /* Interrupt IN endpoint structure */
   FAR struct usbdev_ep_s  *epbulkin;   /* Bulk IN endpoint structure */
   FAR struct usbdev_ep_s  *epbulkout;  /* Bulk OUT endpoint structure */
-  FAR struct usbdev_req_s *ctrlreq;    /* Allocoated control request */
+  FAR struct usbdev_req_s *ctrlreq;    /* Allocated control request */
   struct sq_queue_s        reqlist;    /* List of write request containers */
 
   /* Pre-allocated write request containers.  The write requests will
@@ -238,10 +238,14 @@ static const struct uart_ops_s g_uartops =
   NULL,                 /* receive */
   cdcuart_rxint,        /* rxinit */
   NULL,                 /* rxavailable */
+// #ifdef CONFIG_SERIAL_IFLOWCONTROL                     XXX if ever in conflict with NuttX tree, uncomment
+//   NULL,                 /* rxflowcontrol */
+// #endif
   NULL,                 /* send */
-  cdcuart_txint,        /* txinit */
+  cdcuart_txint,        /* txint */
   NULL,                 /* txready */
-  cdcuart_txempty       /* txempty */
+  cdcuart_txempty,       /* txempty */
+  NULL
 };
 
 /****************************************************************************
@@ -319,7 +323,7 @@ static uint16_t cdcacm_fillrequest(FAR struct cdcacm_dev_s *priv, uint8_t *reqbu
  * Description:
  *   This function obtains write requests, transfers the TX data into the
  *   request, and submits the requests to the USB controller.  This continues
- *   untils either (1) there are no further packets available, or (2) thre is
+ *   until either (1) there are no further packets available, or (2) there is
  *   no further data to send.
  *
  ****************************************************************************/
@@ -429,7 +433,7 @@ static inline int cdcacm_recvpacket(FAR struct cdcacm_dev_s *priv,
    * the serial driver will be extracting data from the circular buffer and modifying
    * recv.tail.  During this time, we should avoid modifying recv.head; Instead we will
    * use a shadow copy of the index.  When interrupts are restored, the real recv.head
-   * will be updated with this indes.
+   * will be updated with this index.
    */
 
   if (priv->rxenabled)
@@ -535,6 +539,7 @@ static struct usbdev_req_s *cdcacm_allocreq(FAR struct usbdev_ep_s *ep,
           req = NULL;
         }
     }
+
   return req;
 }
 
@@ -941,7 +946,7 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
   priv->usbdev   = dev;
 
   /* Save the reference to our private data structure in EP0 so that it
-   * can be recovered in ep0 completion events (Unless we are part of 
+   * can be recovered in ep0 completion events (Unless we are part of
    * a composite device and, in that case, the composite device owns
    * EP0).
    */
@@ -964,9 +969,9 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
 
   /* Pre-allocate all endpoints... the endpoints will not be functional
    * until the SET CONFIGURATION request is processed in cdcacm_setconfig.
-   * This is done here because there may be calls to kmalloc and the SET
+   * This is done here because there may be calls to kmm_malloc and the SET
    * CONFIGURATION processing probably occurrs within interrupt handling
-   * logic where kmalloc calls will fail.
+   * logic where kmm_malloc calls will fail.
    */
 
   /* Pre-allocate the IN interrupt endpoint */
@@ -978,6 +983,7 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
       ret = -ENODEV;
       goto errout;
     }
+
   priv->epintin->priv = priv;
 
   /* Pre-allocate the IN bulk endpoint */
@@ -989,6 +995,7 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
       ret = -ENODEV;
       goto errout;
     }
+
   priv->epbulkin->priv = priv;
 
   /* Pre-allocate the OUT bulk endpoint */
@@ -1000,11 +1007,16 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
       ret = -ENODEV;
       goto errout;
     }
+
   priv->epbulkout->priv = priv;
 
-  /* Pre-allocate read requests */
+  /* Pre-allocate read requests.  The buffer size is one full packet. */
 
-  reqlen = priv->epbulkout->maxpacket;
+#ifdef CONFIG_USBDEV_DUALSPEED
+  reqlen = CONFIG_CDCACM_EPBULKOUT_HSSIZE;
+#else
+  reqlen = CONFIG_CDCACM_EPBULKOUT_FSSIZE;
+#endif
 
   for (i = 0; i < CONFIG_CDCACM_NRDREQS; i++)
     {
@@ -1021,9 +1033,24 @@ static int cdcacm_bind(FAR struct usbdevclass_driver_s *driver,
       reqcontainer->req->callback = cdcacm_rdcomplete;
     }
 
-  /* Pre-allocate write request containers and put in a free list */
+  /* Pre-allocate write request containers and put in a free list.
+   * The buffer size should be larger than a full packet.  Otherwise,
+   * we will send a bogus null packet at the end of each packet.
+   *
+   * Pick the larger of the max packet size and the configured request
+   * size.
+   */
 
-  reqlen = MAX(CONFIG_CDCACM_BULKIN_REQLEN, priv->epbulkin->maxpacket);
+#ifdef CONFIG_USBDEV_DUALSPEED
+  reqlen = CONFIG_CDCACM_EPBULKIN_HSSIZE;
+#else
+  reqlen = CONFIG_CDCACM_EPBULKIN_FSSIZE;
+#endif
+
+  if (CONFIG_CDCACM_BULKIN_REQLEN > reqlen)
+    {
+      reqlen = CONFIG_CDCACM_BULKIN_REQLEN;
+    }
 
   for (i = 0; i < CONFIG_CDCACM_NWRREQS; i++)
     {
@@ -1444,6 +1471,7 @@ static int cdcacm_setup(FAR struct usbdevclass_driver_s *driver,
                   {
                     memcpy(&priv->linecoding, dataout, SIZEOF_CDC_LINECODING);
                   }
+
                 ret = 0;
 
                 /* If there is a registered callback to receive line status info, then
@@ -1556,6 +1584,7 @@ static int cdcacm_setup(FAR struct usbdevclass_driver_s *driver,
           cdcacm_ep0incomplete(dev->ep0, ctrlreq);
         }
     }
+
   return ret;
 }
 
@@ -1614,6 +1643,7 @@ static void cdcacm_disconnect(FAR struct usbdevclass_driver_s *driver,
 
   priv->serdev.xmit.head = 0;
   priv->serdev.xmit.tail = 0;
+  priv->rxhead = 0;
   irqrestore(flags);
 
   /* Perform the soft connect function so that we will we can be
@@ -1804,10 +1834,10 @@ static void cdcuart_detach(FAR struct uart_dev_s *dev)
 
 static int cdcuart_ioctl(FAR struct file *filep,int cmd,unsigned long arg)
 {
-  struct inode        *inode = filep->f_inode;
-  struct cdcacm_dev_s *priv  = inode->i_private;
-  FAR uart_dev_t *serdev = &priv->serdev;
-  int                  ret   = OK;
+  struct inode        *inode  = filep->f_inode;
+  struct cdcacm_dev_s *priv   = inode->i_private;
+  FAR uart_dev_t      *serdev = &priv->serdev;
+  int                  ret    = OK;
 
   switch (cmd)
     {
@@ -1899,97 +1929,92 @@ static int cdcuart_ioctl(FAR struct file *filep,int cmd,unsigned long arg)
       }
       break;
 
-    #ifdef CONFIG_SERIAL_TERMIOS
-          case TCGETS:
+#ifdef CONFIG_SERIAL_TERMIOS
+    case TCGETS:
+      {
+        struct termios *termiosp = (struct termios*)arg;
+
+        if (!termiosp)
           {
-            struct termios *termiosp = (struct termios*)arg;
-
-            if (!termiosp)
-              {
-                ret = -EINVAL;
-                break;
-              }
-
-            /* and update with flags from this layer */
-
-            termiosp->c_iflag = serdev->tc_iflag;
-            termiosp->c_oflag = serdev->tc_oflag;
-            termiosp->c_lflag = serdev->tc_lflag;
+            ret = -EINVAL;
+            break;
           }
 
-          break;
+        /* And update with flags from this layer */
 
-        case TCSETS:
+        termiosp->c_iflag = serdev->tc_iflag;
+        termiosp->c_oflag = serdev->tc_oflag;
+        termiosp->c_lflag = serdev->tc_lflag;
+      }
+      break;
+
+    case TCSETS:
+      {
+        struct termios *termiosp = (struct termios*)arg;
+
+        if (!termiosp)
           {
-            struct termios *termiosp = (struct termios*)arg;
-
-            if (!termiosp)
-              {
-                ret = -EINVAL;
-                break;
-              }
-
-            /* update the flags we keep at this layer */
-
-            serdev->tc_iflag = termiosp->c_iflag;
-            serdev->tc_oflag = termiosp->c_oflag;
-            serdev->tc_lflag = termiosp->c_lflag;
+            ret = -EINVAL;
+            break;
           }
 
-          break;
+        /* Update the flags we keep at this layer */
+
+        serdev->tc_iflag = termiosp->c_iflag;
+        serdev->tc_oflag = termiosp->c_oflag;
+        serdev->tc_lflag = termiosp->c_lflag;
+      }
+      break;
 #endif
 
-          case FIONREAD:
+    case FIONREAD:
+      {
+        int count;
+        irqstate_t state = irqsave();
+
+        /* Determine the number of bytes available in the buffer. */
+
+        if (serdev->recv.tail <= serdev->recv.head)
           {
-            int count;
-            irqstate_t state = irqsave();
-
-            /* determine the number of bytes available in the buffer */
-
-            if (serdev->recv.tail <= serdev->recv.head)
-              { 
-                count = serdev->recv.head - serdev->recv.tail;
-              }
-            else
-              {
-                count = serdev->recv.size - (serdev->recv.tail - serdev->recv.head);
-              }
-
-            irqrestore(state);
-
-            *(int *)arg = count;
-            ret = 0;
-
-            break;
+            count = serdev->recv.head - serdev->recv.tail;
+          }
+        else
+          {
+            count = serdev->recv.size - (serdev->recv.tail - serdev->recv.head);
           }
 
-          case FIONWRITE:
+        irqrestore(state);
+
+        *(int *)arg = count;
+        ret = 0;
+      }
+      break;
+
+    case FIONWRITE:
+      {
+        int count;
+        irqstate_t state = irqsave();
+
+        /* Determine the number of bytes free in the buffer. */
+
+        if (serdev->xmit.head < serdev->xmit.tail)
           {
-            int count;
-            irqstate_t state = irqsave();
-
-            /* determine the number of bytes free in the buffer */
-
-            if (serdev->xmit.head < serdev->xmit.tail)
-              { 
-                count = serdev->xmit.tail - serdev->xmit.head - 1;
-              }
-            else
-              {
-                count = serdev->xmit.size - (serdev->xmit.head - serdev->xmit.tail) - 1;
-              }
-
-            irqrestore(state);
-
-            *(int *)arg = count;
-            ret = 0;
-
-            break;
+            count = serdev->xmit.tail - serdev->xmit.head - 1;
           }
+        else
+          {
+            count = serdev->xmit.size - (serdev->xmit.head - serdev->xmit.tail) - 1;
+          }
+
+        irqrestore(state);
+
+        *(int *)arg = count;
+        ret = 0;
+      }
+      break;
 
     default:
-            
-            ret = -ENOSYS;
+      ret = -ENOTTY;
       break;
     }
 
@@ -2054,7 +2079,7 @@ static void cdcuart_rxint(FAR struct uart_dev_s *dev, bool enable)
             * buffer and modifying recv.tail.  During this time, we
             * should avoid modifying recv.head; When interrupts are restored,
             * we can update the head pointer for all of the data that we
-            * put into cicular buffer while "interrupts" were disabled.
+            * put into circular buffer while "interrupts" were disabled.
             */
 
           if (priv->rxhead != serdev->recv.head)
@@ -2145,9 +2170,9 @@ static void cdcuart_txint(FAR struct uart_dev_s *dev, bool enable)
  * Description:
  *   Return true when all data has been sent.  This is called from the
  *   serial driver when the driver is closed.  It will call this API
- *   periodically until it reports true.  NOTE that the serial driver takes all
- *   responsibility for flushing TX data through the hardware so we can be
- *   a bit sloppy about that.
+ *   periodically until it reports true.  NOTE that the serial driver takes
+ *   all responsibility for flushing TX data through the hardware so we can
+ *   be a bit sloppy about that.
  *
  ****************************************************************************/
 
@@ -2207,7 +2232,7 @@ int cdcacm_classobject(int minor, FAR struct usbdevclass_driver_s **classdev)
 
   /* Allocate the structures needed */
 
-  alloc = (FAR struct cdcacm_alloc_s*)kmalloc(sizeof(struct cdcacm_alloc_s));
+  alloc = (FAR struct cdcacm_alloc_s*)kmm_malloc(sizeof(struct cdcacm_alloc_s));
   if (!alloc)
     {
       usbtrace(TRACE_CLSERROR(USBSER_TRACEERR_ALLOCDEVSTRUCT), 0);
@@ -2238,7 +2263,7 @@ int cdcacm_classobject(int minor, FAR struct usbdevclass_driver_s **classdev)
 
   /* Initialize the serial driver sub-structure */
 
-      /* The initial state is disconnected */
+  /* The initial state is disconnected */
 
 #ifdef CONFIG_SERIAL_REMOVABLE
   priv->serdev.disconnected = true;
@@ -2286,7 +2311,7 @@ int cdcacm_classobject(int minor, FAR struct usbdevclass_driver_s **classdev)
   return OK;
 
 errout_with_class:
-  kfree(alloc);
+  kmm_free(alloc);
   return ret;
 }
 
@@ -2304,7 +2329,7 @@ errout_with_class:
  *
  * Returned Value:
  *   Zero (OK) means that the driver was successfully registered.  On any
- *   failure, a negated errno value is retured.
+ *   failure, a negated errno value is returned.
  *
  ****************************************************************************/
 
@@ -2346,7 +2371,7 @@ int cdcacm_initialize(int minor, FAR void **handle)
  *
  * Description:
  *   Un-initialize the USB storage class driver.  This function is used
- *   internally by the USB composite driver to unitialize the CDC/ACM
+ *   internally by the USB composite driver to uninitialize the CDC/ACM
  *   driver.  This same interface is available (with an untyped input
  *   parameter) when the CDC/ACM driver is used standalone.
  *
@@ -2357,7 +2382,7 @@ int cdcacm_initialize(int minor, FAR void **handle)
  *
  *     classdev - The class object returned by board_cdcclassobject() or
  *       cdcacm_classobject()
- *     handle - The opaque handle represetning the class object returned by
+ *     handle - The opaque handle representing the class object returned by
  *       a previous call to cdcacm_initialize().
  *
  * Returned Value:
@@ -2379,6 +2404,22 @@ void cdcacm_uninitialize(FAR void *handle)
   FAR struct cdcacm_dev_s    *priv = drvr->dev;
   char devname[CDCACM_DEVNAME_SIZE];
   int ret;
+
+#ifdef CONFIG_CDCACM_COMPOSITE
+  /* Check for pass 2 uninitialization.  We did most of the work on the
+   * first pass uninitialization.
+   */
+
+  if (priv->minor == (uint8_t)-1)
+    {
+      /* In this second and final pass, all that remains to be done is to
+       * free the memory resources.
+       */
+
+      kmm_free(priv);
+      return;
+    }
+#endif
 
   /* Un-register the CDC/ACM TTY device */
 
@@ -2402,9 +2443,19 @@ void cdcacm_uninitialize(FAR void *handle)
 
 #ifndef CONFIG_CDCACM_COMPOSITE
   usbdev_unregister(&drvr->drvr);
-#endif
 
   /* And free the driver structure */
 
-  kfree(priv);
+  kmm_free(priv);
+
+#else
+  /* For the case of the composite driver, there is a two pass
+   * uninitialization sequence.  We cannot yet free the driver structure.
+   * We will do that on the second pass.  We mark the fact that we have
+   * already uninitialized by setting the minor number to -1.  If/when we
+   * are called again, then we will free the memory resources.
+   */
+
+  priv->minor = (uint8_t)-1;
+#endif
 }
