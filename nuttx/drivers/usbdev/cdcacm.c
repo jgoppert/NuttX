@@ -2232,7 +2232,7 @@ int cdcacm_classobject(int minor, FAR struct usbdevclass_driver_s **classdev)
 
   /* Allocate the structures needed */
 
-  alloc = (FAR struct cdcacm_alloc_s*)kmm_malloc(sizeof(struct cdcacm_alloc_s));
+  alloc = (FAR struct cdcacm_alloc_s*)kmalloc(sizeof(struct cdcacm_alloc_s));
   if (!alloc)
     {
       usbtrace(TRACE_CLSERROR(USBSER_TRACEERR_ALLOCDEVSTRUCT), 0);
@@ -2311,7 +2311,7 @@ int cdcacm_classobject(int minor, FAR struct usbdevclass_driver_s **classdev)
   return OK;
 
 errout_with_class:
-  kmm_free(alloc);
+  kfree(alloc);
   return ret;
 }
 
