@@ -4230,7 +4230,7 @@ static FAR struct usbdev_req_s *stm32_ep_allocreq(FAR struct usbdev_ep_s *ep)
 
   usbtrace(TRACE_EPALLOCREQ, ((FAR struct stm32_ep_s *)ep)->epphy);
 
-  privreq = (FAR struct stm32_req_s *)kmm_malloc(sizeof(struct stm32_req_s));
+  privreq = (FAR struct stm32_req_s *)kmalloc(sizeof(struct stm32_req_s));
   if (!privreq)
     {
       usbtrace(TRACE_DEVERROR(STM32_TRACEERR_ALLOCFAIL), 0);
@@ -4262,7 +4262,7 @@ static void stm32_ep_freereq(FAR struct usbdev_ep_s *ep, FAR struct usbdev_req_s
 #endif
 
   usbtrace(TRACE_EPFREEREQ, ((FAR struct stm32_ep_s *)ep)->epphy);
-  kmm_free(privreq);
+  kfree(privreq);
 }
 
 /*******************************************************************************
@@ -4281,7 +4281,7 @@ static void *stm32_ep_allocbuffer(FAR struct usbdev_ep_s *ep, unsigned bytes)
 #ifdef CONFIG_USBDEV_DMAMEMORY
   return usbdev_dma_alloc(bytes);
 #else
-  return kmm_malloc(bytes);
+  return kmalloc(bytes);
 #endif
 }
 #endif
@@ -4302,7 +4302,7 @@ static void stm32_ep_freebuffer(FAR struct usbdev_ep_s *ep, FAR void *buf)
 #ifdef CONFIG_USBDEV_DMAMEMORY
   usbdev_dma_free(buf);
 #else
-  kmm_free(buf);
+  kfree(buf);
 #endif
 }
 #endif
