@@ -90,10 +90,10 @@
  *
  ****************************************************************************/
 
-static void sig_timeout(int argc, uint32_t itcb)
+static void sig_timeout(int argc, uintptr_t itcb)
 {
   /* On many small machines, pointers are encoded and cannot be simply cast
-   * from uint32_t to struct tcb_s*.  The following union works around this
+   * from uintptr_t to struct tcb_s*.  The following union works around this
    * (see wdogparm_t).  This odd logic could be conditioned on
    * CONFIG_CAN_CAST_POINTERS, but it is not too bad in any case.
    */
@@ -101,7 +101,7 @@ static void sig_timeout(int argc, uint32_t itcb)
   union
     {
       FAR struct tcb_s *wtcb;
-      uint32_t itcb;
+      uintptr_t itcb;
     } u;
 
   u.itcb = itcb;
